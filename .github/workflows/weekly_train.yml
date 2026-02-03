@@ -1,0 +1,40 @@
+name: Weekly Model Retraining
+
+on:
+  schedule:
+    # Jalan setiap MINGGU jam 16:00 UTC (23:00 WIB)
+    # Supaya Senin pagi model sudah fresh
+    - cron: '0 16 * * 0'
+  workflow_dispatch: # Tombol manual
+
+permissions:
+  contents: write # IZIN WAJIB: Supaya bot bisa upload file balik ke repo
+
+jobs:
+  train_and_update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Training Script
+        run: python train.py
+
+      - name: Commit and Push New Model
+        run: |
+          git config --global user.name 'GitHub Action Bot'
+          git config --global user.email 'action@github.com'
+          # Add file model dan scaler
+          git add model_lstm.keras scaler.pkl
+          # Commit hanya jika ada perubahan
+          git commit -m "🧠 Weekly Model Update: $(date +'%Y-%m-%d')" || echo "No changes to commit"
+          # Push ke repo
+          git push
