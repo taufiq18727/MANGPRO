@@ -1,132 +1,130 @@
 import yfinance as yf
-import pandas as pd
 import numpy as np
-import requests
-import time
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import precision_score
-from datetime import datetime
+import pandas as pd
+import joblib
+import os
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, GaussianNoise
+from sklearn.preprocessing import MinMaxScaler
 
-# --- KONFIGURASI ---
-BOT_TOKEN = "8599866641:AAHA7GxblUZ6jVedQ2UOniFWKqxBy6HMn3M"
-CHAT_IDS = ["977432672", "864486458"]
-
+# --- 1. KONFIGURASI PELATIHAN ---
+# Saham yang dijadikan bahan belajar (General Model)
 tickers = [
-    "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "BRIS.JK", # Banking
-    "ADRO.JK", "PTBA.JK", "PGAS.JK", "RAJA.JK", "MEDC.JK", # Energy
-    "ANTM.JK", "MDKA.JK", "BRMS.JK", "TINS.JK", "PSAB.JK", # Minerals
-    "TLKM.JK", "ISAT.JK", "GOTO.JK", "ASII.JK", "BUKA.JK", # Tech/Telco
-    "PANI.JK", "BSDE.JK", "CTRA.JK", "SMRA.JK"             # Property
+    "BBCA.JK", "BBRI.JK", "BMRI.JK", "TLKM.JK", 
+    "ASII.JK", "ANTM.JK", "MDKA.JK", "GOTO.JK",
+    "ADRO.JK", "PGAS.JK", "UNVR.JK", "ICBP.JK"
 ]
 
-# --- FUNGSI KIRIM TELEGRAM ---
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    for user_id in CHAT_IDS:
-        try:
-            payload = {"chat_id": user_id, "text": message, "parse_mode": "Markdown"}
-            requests.post(url, json=payload)
-            time.sleep(0.5) 
-        except Exception as e:
-            print(f"Error sending to {user_id}: {e}")
+SEQ_LEN = 60  # Melihat 60 hari ke belakang (approx 3 bulan data trading)
 
-# --- MACHINE LEARNING ENGINE ---
-def add_indicators(df):
+def add_features(df):
     df = df.copy()
-    # RSI
+    # RSI (Momentum)
     delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
     
-    # MA Ratios & Volatility
-    df['SMA5_Ratio'] = df['Close'] / df['Close'].rolling(window=5).mean()
-    df['SMA20_Ratio'] = df['Close'] / df['Close'].rolling(window=20).mean()
-    df['Vol_Ratio'] = df['Volume'] / df['Volume'].rolling(window=20).mean()
-    df['Return'] = df['Close'].pct_change()
+    # Weekly Trend (Harga hari ini vs 5 hari lalu)
+    df['Weekly_Trend'] = df['Close'] / df['Close'].shift(5)
+    
+    # Volatility (Volume Change)
+    df['Vol_Change'] = df['Volume'] / df['Volume'].rolling(20).mean()
     
     return df.dropna()
 
-def predict_stock(ticker):
-    try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period="2y", auto_adjust=True)
-        if len(df) < 200: return None
+def create_sequences(data, seq_length):
+    xs, ys = [], []
+    for i in range(len(data) - seq_length - 3):
+        x = data[i:(i + seq_length)]
+        # Target: Apakah harga 3 hari ke depan > harga hari ini? (Swing)
+        current_price = data[i + seq_length - 1, 3] # Index 3 adalah Close
+        future_price = data[i + seq_length + 2, 3]  
+        
+        y = 1 if future_price > current_price else 0
+        xs.append(x)
+        ys.append(y)
+    return np.array(xs), np.array(ys)
 
-        df = add_indicators(df)
-        
-        # Target: 1 jika besok naik, 0 jika tidak
-        df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
-        
-        features = ['RSI', 'SMA5_Ratio', 'SMA20_Ratio', 'Vol_Ratio', 'Return']
-        
-        # Training (Semua data kecuali 60 hari terakhir)
-        train = df.iloc[:-60]
-        test = df.iloc[-60:]
-        
-        model = RandomForestClassifier(n_estimators=100, min_samples_split=20, random_state=1)
-        model.fit(train[features], train['Target'])
-        
-        # Evaluasi Akurasi (Precision)
-        preds = model.predict(test[features])
-        precision = precision_score(test['Target'], preds, zero_division=0)
-        
-        # Prediksi Besok
-        last_day = df.iloc[[-1]][features]
-        proba = model.predict_proba(last_day)[0]
-        prob_up = proba[1] # Probabilitas Naik
-        
-        return {
-            "price": df.iloc[-1]['Close'],
-            "precision": precision,
-            "prob_up": prob_up
-        }
-    except:
-        return None
-
-def run_analysis():
-    print("Memulai Analisa AI...")
+def train():
+    print("🏋️‍♂️ Memulai Retraining Mingguan...")
     
-    report_lines = []
+    all_X, all_y = [], []
+    processed_data_list = []
+    
+    # 1. Download & Preprocess Data
+    # Ambil 2 tahun terakhir untuk memastikan cukup data buat deep learning
+    print("⬇️ Download data terbaru...")
+    raw_data = yf.download(tickers, period="2y", auto_adjust=True, group_by='ticker', threads=True)
+    
+    # 2. Siapkan Scaler
+    # Kita pakai 1 Scaler untuk semua saham agar model paham "General Pattern"
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    
+    # Kumpulkan semua data valid untuk fitting scaler
+    temp_list_for_scaling = []
     
     for t in tickers:
-        res = predict_stock(t)
-        if not res: continue
-        
-        symbol = t.replace(".JK", "")
-        # Filter: Hanya tampilkan jika Probabilitas > 50%
-        if res['prob_up'] > 0.50:
-            emoji = "🟢" if res['prob_up'] >= 0.60 else "⚪"
-            line = f"{emoji} {symbol:<5} | {int(res['price']):<6} | {int(res['prob_up']*100)}%"
-            report_lines.append(line)
+        try:
+            df = raw_data[t].copy()
+            if len(df) < 200: continue
             
-    # Menyusun Pesan Telegram
-    date_now = datetime.now().strftime("%d-%m-%Y")
-    
-    # Header
-    msg = f"🤖 *AI PREDICTION REPORT*\n🗓 {date_now}\n"
-    msg += f"_Metode: Random Forest (ML)_\n"
-    msg += "—" * 15 + "\n"
-    msg += "`Sts  Saham  Harga   Peluang`\n" # Header Tabel Monospace
-    msg += "```\n" # Mulai blok kode agar tabel rapi
-    
-    # Isi Tabel (Diurutkan dari peluang tertinggi)
-    # Sort based on probability descending
-    report_lines.sort(key=lambda x: int(x.split('|')[2].replace('%','')), reverse=True)
-    
-    msg += "\n".join(report_lines)
-    msg += "\n```" # Tutup blok kode
-    
-    # Legend & Disclaimer
-    msg += "\n—" * 15
-    msg += "\n🟢 = Potensi Kuat (>60%)"
-    msg += "\n⚪ = Netral/Pantau (50-60%)"
-    msg += "\n\n💡 *Disclaimer On*: AI hanya membaca pola data historis."
+            df = add_features(df)
+            
+            # Kolom Fitur: Open, High, Low, Close, Volume, RSI, Weekly, VolChange
+            cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'Weekly_Trend', 'Vol_Change']
+            vals = df[cols].values
+            
+            temp_list_for_scaling.append(vals)
+            processed_data_list.append(vals) # Simpan untuk sequence nanti
+        except Exception as e:
+            print(f"Skip {t}: {e}")
+            continue
 
-    print("Mengirim ke Telegram...")
-    send_telegram(msg)
-    print("Selesai.")
+    if not temp_list_for_scaling:
+        print("❌ Tidak ada data valid.")
+        return
+
+    # Fit Scaler ke SEMUA data gabungan
+    combined_data = np.vstack(temp_list_for_scaling)
+    scaler.fit(combined_data)
+    
+    # Simpan Scaler Baru (Menimpa yang lama)
+    joblib.dump(scaler, 'scaler.pkl')
+    print("✅ Scaler diperbarui & disimpan.")
+
+    # 3. Buat Sequence Data (X dan y)
+    for vals in processed_data_list:
+        scaled_vals = scaler.transform(vals)
+        X, y = create_sequences(scaled_vals, SEQ_LEN)
+        all_X.append(X)
+        all_y.append(y)
+    
+    final_X = np.vstack(all_X)
+    final_y = np.concatenate(all_y)
+    
+    print(f"🧠 Training pada {len(final_X)} sampel data...")
+
+    # 4. Arsitektur Model LSTM (Robust)
+    model = Sequential([
+        # Gaussian Noise untuk simulasi "Jitter" / Gangguan pasar
+        GaussianNoise(0.02, input_shape=(SEQ_LEN, 8)), 
+        LSTM(64, return_sequences=False),
+        Dropout(0.3),
+        Dense(32, activation='relu'),
+        Dense(1, activation='sigmoid') # Output Probabilitas 0-1
+    ])
+    
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    
+    # Train
+    model.fit(final_X, final_y, epochs=25, batch_size=32, verbose=1)
+    
+    # Simpan Model Baru (Menimpa yang lama)
+    model.save('model_lstm.keras')
+    print("✅ Model baru disimpan: model_lstm.keras")
 
 if __name__ == "__main__":
-    run_analysis()
+    train()
