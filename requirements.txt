@@ -5,3 +5,4 @@ requests
 tensorflow
 scikit-learn
 lxml
+joblib
