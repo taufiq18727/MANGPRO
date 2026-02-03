@@ -11,13 +11,55 @@ BOT_TOKEN = "8599866641:AAHA7GxblUZ6jVedQ2UOniFWKqxBy6HMn3M"
 CHAT_IDS = ["977432672", "864486458"]
 
 # Daftar saham yang mau di-scan setiap hari (Bisa beda sama training)
+# Daftar Saham Screening (Lengkap & Terkurasi)
 target_tickers = [
-    "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "BRIS.JK",
-    "ADRO.JK", "PTBA.JK", "PGAS.JK", "RAJA.JK", "MEDC.JK",
-    "ANTM.JK", "MDKA.JK", "BRMS.JK", "TINS.JK", "PSAB.JK",
-    "TLKM.JK", "ISAT.JK", "GOTO.JK", "ASII.JK", "BUKA.JK",
-    "PANI.JK", "BSDE.JK", "CTRA.JK", "SMRA.JK" 
+    # --- 1. PERBANKAN (The Movers) ---
+    "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", # Big 4
+    "BRIS.JK", "BBTN.JK", "BDMN.JK", "BNGA.JK", # Syariah & Mid banks
+    "ARTO.JK", # Digital Bank (High Beta)
+
+    # --- 2. ENERGI & TAMBANG (Commodity Supercycle) ---
+    "ADRO.JK", "PTBA.JK", "ITMG.JK", "UNTR.JK", # Coal Giants
+    "PGAS.JK", "MEDC.JK", "AKRA.JK",            # Oil & Gas
+    "ANTM.JK", "MDKA.JK", "INCO.JK", "TINS.JK", # Nickel/Gold/Tin
+    "MBMA.JK", "NCKL.JK", "HRUM.JK",            # Nickel Processing
+
+    # --- 3. INFRA & TELCO ---
+    "TLKM.JK", "ISAT.JK", "EXCL.JK",            # Telecommunication
+    "JSMR.JK",                                  # Toll Road
+    
+    # --- 4. CONSUMER & RETAIL (Defensive) ---
+    "ICBP.JK", "INDF.JK", "MYOR.JK", "UNVR.JK", # FMCG
+    "AMRT.JK", "MIDI.JK", "MAPI.JK", "ACES.JK", # Retail
+    "CPIN.JK", "JPFA.JK",                       # Poultry (Ayam)
+
+    # --- 5. PROPERTY & KONSTRUKSI ---
+    "BSDE.JK", "CTRA.JK", "SMRA.JK", "PWON.JK", # Property Developers
+    "PANI.JK",                                  # The "Hot" Property Stock
+
+    # --- 6. TEKNOLOGI ---
+    "GOTO.JK", "BUKA.JK", "EMTK.JK",            # Indo Tech Giants
+
+    # --- 7. AUTOMOTIVE & INDUSTRIAL ---
+    "ASII.JK", "AUTO.JK", "DRMA.JK",            # Astra & Spareparts
+    
+    # --- 8. PULP & PAPER ---
+    "INKP.JK", "TKIM.JK",                       # Kertas (Cyclical)
+
+    # --- 9. HIGH VOLATILITY / TRADING FAVOURITES (Rekomendasi Pantau) ---
+    # Saham-saham ini sering bergerak liar tapi profitnya kencang (High Risk High Reward)
+    # AI sangat suka volatilitas volume di sini.
+    "BRMS.JK",  # Emas (Bumi Resources Minerals)
+    "BUMI.JK",  # Batubara (Bakrie)
+    "DEWA.JK",  # Infrastruktur (Bakrie)
+    "PSAB.JK",  # Emas (J Resources)
+    "DOID.JK",  # Kontraktor Tambang
+    "MAPA.JK",  # Retail Fashion
+    "SRTG.JK",  # Investment Saratoga
+    "ESSA.JK",  # Amonia
+    "GJAW.JK"   # Consumer (Gajah Tunggal) - Opsional jika likuid
 ]
+
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
