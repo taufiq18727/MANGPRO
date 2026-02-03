@@ -2,5 +2,6 @@ yfinance
 pandas
 numpy
 requests
+tensorflow
 scikit-learn
 lxml
