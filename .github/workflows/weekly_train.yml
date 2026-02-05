@@ -2,16 +2,16 @@ name: Weekly Model Retraining
 
 on:
   schedule:
-    # Jalan setiap MINGGU jam 16:00 UTC (23:00 WIB)
-    # Supaya Senin pagi model sudah fresh
-    - cron: '0 16 * * 0'
-  workflow_dispatch: # Tombol manual
+    - cron: '0 0 * * 0' # Jalan tiap minggu
+  workflow_dispatch:      # Bisa di-klik manual
 
+# --- TAMBAHKAN BAGIAN INI ---
 permissions:
-  contents: write # IZIN WAJIB: Supaya bot bisa upload file balik ke repo
+  contents: write
+# -----------------------------
 
 jobs:
-  train_and_update:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repo
@@ -23,18 +23,16 @@ jobs:
           python-version: '3.9'
 
       - name: Install Dependencies
-        run: pip install -r requirements.txt
+        run: pip install pandas numpy yfinance tensorflow scikit-learn joblib
 
       - name: Run Training Script
         run: python train.py
 
+      # --- PASTIKAN BAGIAN INI BENAR ---
       - name: Commit and Push New Model
         run: |
-          git config --global user.name 'GitHub Action Bot'
-          git config --global user.email 'action@github.com'
-          # Add file model dan scaler
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
           git add model_lstm.keras scaler.pkl
-          # Commit hanya jika ada perubahan
-          git commit -m "🧠 Weekly Model Update: $(date +'%Y-%m-%d')" || echo "No changes to commit"
-          # Push ke repo
+          git commit -m "Auto-update model mingguan" || echo "No changes to commit"
           git push
