@@ -3,115 +3,126 @@ import numpy as np
 import pandas as pd
 import joblib
 import requests
+import ta
 import tensorflow as tf
 from datetime import datetime
+import os
 
-# --- CONFIG ---
-BOT_TOKEN = "8599866641:AAHA7GxblUZ6jVedQ2UOniFWKqxBy6HMn3M"
-CHAT_IDS = ["977432672", "864486458"]
+# --- SETUP TELEGRAM (Ambil dari Environment Variable GitHub) ---
+BOT_TOKEN = os.getenv("BOT_TOKEN") 
+CHAT_ID = os.getenv("CHAT_ID")
 
-target_tickers = [
-    "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "BRIS.JK", "ARTO.JK",
-    "ADRO.JK", "PTBA.JK", "PGAS.JK", "MEDC.JK", "ANTM.JK", "MDKA.JK", 
-    "TLKM.JK", "ISAT.JK", "EXCL.JK", "GOTO.JK", "BUKA.JK", "ASII.JK",
-    "ICBP.JK", "INDF.JK", "UNVR.JK", "AMRT.JK", "BSDE.JK", "CTRA.JK", 
-    "PANI.JK", "BRMS.JK", "BUMI.JK", "PSAB.JK", "DOID.JK", "ACES.JK",
-    "SMRA.JK", "PWON.JK", "MAPA.JK"
+# Jika testing lokal, hardcode sementara (Jangan commit token asli ke public repo!)
+# BOT_TOKEN = "TOKEN_ANDA"
+# CHAT_ID = "ID_ANDA"
+
+# List Saham Screening (Daftar Favorit Anda)
+TARGET_TICKERS = [
+    "BBCA.JK", "BBRI.JK", "BMRI.JK", "BBNI.JK", "BRIS.JK",
+    "ADRO.JK", "PTBA.JK", "PGAS.JK", "ANTM.JK", "MDKA.JK", "MBMA.JK",
+    "TLKM.JK", "ISAT.JK", "JSMR.JK",
+    "ICBP.JK", "MYOR.JK", "AMRT.JK", "MAPI.JK", "ACES.JK",
+    "BSDE.JK", "CTRA.JK", "SMRA.JK", "PWON.JK",
+    "GOTO.JK", "BUKA.JK", "EMTK.JK",
+    "ASII.JK", "AUTO.JK", "DRMA.JK",
+    "BRMS.JK", "BUMI.JK", "DOID.JK", "MAPA.JK", "ESSA.JK"
 ]
 
-def send_telegram(msg):
+SEQ_LEN = 60
+
+def send_telegram(message):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("⚠️ Telegram Token/Chat ID belum diset.")
+        return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    for uid in CHAT_IDS:
-        try:
-            requests.post(url, json={"chat_id": uid, "text": msg, "parse_mode": "Markdown"})
-        except: pass
+    requests.post(url, json={"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"})
 
-def predict_daily():
-    print("🔍 Memulai Prediksi Harian...")
+def add_technical_indicators(df):
+    # Sama persis dengan fungsi training
+    df = df.copy()
+    df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
+    df['RSI'] = ta.momentum.rsi(df['Close'], window=14) / 100.0
+    macd = ta.trend.MACD(df['Close'])
+    df['MACD_Diff'] = macd.macd_diff() / df['Close']
+    indicator_bb = ta.volatility.BollingerBands(close=df['Close'], window=20, window_dev=2)
+    df['BB_Pband'] = indicator_bb.bollinger_pband()
+    df['Vol_Change'] = np.log(df['Volume'] / df['Volume'].shift(1).replace(0, 1))
+    df.dropna(inplace=True)
+    return df[['Log_Ret', 'RSI', 'MACD_Diff', 'BB_Pband', 'Vol_Change']]
 
+def run_prediction():
+    print("🔍 Menjalankan Screening Harian...")
+    
     try:
-        # Load model tanpa compile agar tidak error masalah Focal Loss custom object
-        model = tf.keras.models.load_model('model_lstm.keras', compile=False)
-        scaler = joblib.load('scaler.pkl')
-    except Exception as e:
-        print(f"❌ Error Loading: {e}")
+        model = tf.keras.models.load_model('model_advanced.keras')
+        scaler = joblib.load('scaler_advanced.pkl')
+    except:
+        print("❌ Model/Scaler tidak ditemukan. Jalankan train.py dulu.")
         return
 
-    report_lines = []
+    predictions = []
     
-    # Download data agak banyak untuk perhitungan indikator
-    data = yf.download(target_tickers, period="6mo", auto_adjust=True, group_by='ticker', threads=True)
+    # Download data 6 bulan terakhir
+    data = yf.download(TARGET_TICKERS, period="6mo", interval="1d", group_by='ticker', auto_adjust=True, threads=True)
     
-    for t in target_tickers:
+    for t in TARGET_TICKERS:
         try:
-            # --- FIX INDENTATION BLOCK ---
             df = data[t].copy()
             if len(df) < 100: continue
             
-            # --- FEATURE ENGINEERING (WAJIB SAMA DENGAN TRAIN) ---
-            df['Log_Ret'] = np.log(df['Close'] / df['Close'].shift(1))
+            # Ambil harga terakhir real untuk display
+            last_price = df['Close'].iloc[-1]
             
-            delta = df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-            rs = gain / loss
-            df['RSI'] = 100 - (100 / (1 + rs))
+            # Preprocessing
+            df_features = add_technical_indicators(df)
             
-            ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-            ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-            df['MACD'] = ema12 - ema26
+            # Ambil sequence terakhir
+            if len(df_features) < SEQ_LEN: continue
+            last_seq = df_features.values[-SEQ_LEN:]
             
-            df['Vol_Change'] = df['Volume'] / df['Volume'].rolling(20).mean()
+            # Scale & Reshape
+            last_seq_scaled = scaler.transform(last_seq)
+            input_data = np.expand_dims(last_seq_scaled, axis=0)
             
-            df['MA50'] = df['Close'].rolling(50).mean()
-            df['Dist_MA50'] = (df['Close'] - df['MA50']) / df['MA50']
-            
-            df = df.dropna()
-            
-            # Ambil 60 data terakhir
-            cols = ['Log_Ret', 'RSI', 'MACD', 'Vol_Change', 'Dist_MA50']
-            last_seq = df[cols].values[-60:]
-            
-            if len(last_seq) < 60: continue
-            
-            # Scaling
-            input_scaled = scaler.transform(last_seq)
-            input_data = np.expand_dims(input_scaled, axis=0)
-            
-            # Prediksi
+            # Predict
             prob = model.predict(input_data, verbose=0)[0][0]
-            price = df.iloc[-1]['Close']
             
-            # --- LOGIC OUTPUT ---
-            # Karena pakai Focal Loss, output biasanya terpolarisasi (sangat kecil atau sangat besar)
-            # Kita filter yang > 50%
-            if prob > 0.50: 
-                # Icon khusus untuk probabilitas tinggi
-                icon = "💎" if prob > 0.75 else "⚡"
-                line = f"{icon} {t.replace('.JK',''):<5}| {int(price):<6}| {int(prob*100)}%"
-                report_lines.append(line)
+            # Logika Sinyal (Hanya ambil yang confidence tinggi)
+            # Threshold > 0.60 karena model baru lebih ketat
+            if prob > 0.55: 
+                signal_strength = "⚡" if prob > 0.75 else "🟢"
+                predictions.append({
+                    'ticker': t.replace('.JK',''),
+                    'price': int(last_price),
+                    'prob': prob,
+                    'icon': signal_strength
+                })
                 
         except Exception as e:
-            # print(f"Error {t}: {e}") # Debugging only
             continue
-
-    # Kirim Laporan
+            
+    # Sort by Probability Tertinggi
+    predictions.sort(key=lambda x: x['prob'], reverse=True)
+    
+    # Format Pesan Telegram
     date_now = datetime.now().strftime("%d-%m-%Y")
-    msg = f"🦅 *EAGLE EYE PRO V3*\n🗓 {date_now}\n"
-    msg += f"_System: Focal Loss + Log Return_\n"
+    msg = f"🦅 *EAGLE EYE AI PREDICTION*\n"
+    msg += f"🗓 {date_now} | _Bi-LSTM Model_\n"
     msg += "—" * 15 + "\n"
-    msg += "`Sts  Saham  Harga   Prob`\n```\n"
+    msg += "`Sts  Saham  Harga   Conf`\n"
+    msg += "```\n"
     
-    report_lines.sort(key=lambda x: int(x.split('|')[2].replace('%','')), reverse=True)
-    
-    if report_lines:
-        msg += "\n".join(report_lines)
+    if predictions:
+        for p in predictions[:15]: # Top 15 saja
+            # Format: ⚡ BBCA  | 10200 | 85%
+            msg += f"{p['icon']} {p['ticker']:<5}| {p['price']:<6}| {int(p['prob']*100)}%\n"
     else:
-        msg += "Market tidak jelas.\nAI memilih *Wait & See* (No Signal)."
+        msg += "Market mendung. Tidak ada sinyal kuat > 55%.\n"
         
-    msg += "\n```\n💡 *Disclaimer On*"
+    msg += "```\n💡 _Disclaimer: High Risk_"
+    
+    print(msg)
     send_telegram(msg)
-    print("✅ Selesai.")
 
 if __name__ == "__main__":
-    predict_daily()
+    run_prediction()
