@@ -1,8 +1,8 @@
-yfinance
-pandas
 numpy
-requests
-tensorflow
+pandas
+yfinance
 scikit-learn
-lxml
+tensorflow
 joblib
+requests
+ta
